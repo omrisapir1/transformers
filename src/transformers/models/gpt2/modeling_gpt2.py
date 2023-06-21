@@ -977,7 +977,7 @@ class GPT2LMHeadModel(GPT2PreTrainedModel):
         self.post_init()
 
     def get_multi_label_loss(self, labels, multi_label_logits):
-        binary_tensor = torch.nn.functional.one_hot(torch.where(labels == IGNORE_INDEX, torch.tensor(0, device=labels).to(labels.device), labels),
+        binary_tensor = torch.nn.functional.one_hot(torch.where(labels == IGNORE_INDEX, torch.tensor(0, device=labels.to(labels.device)), labels),
                                                     num_classes=self.num_classes)
 
         # Flip the tensor along the second dimension
