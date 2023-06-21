@@ -63,6 +63,7 @@ GPT2_PRETRAINED_MODEL_ARCHIVE_LIST = [
     # See all GPT-2 models at https://huggingface.co/models?filter=gpt2
 ]
 
+IGNORE_INDEX = -100
 
 def load_tf_weights_in_gpt2(model, config, gpt2_checkpoint_path):
     """Load tf checkpoints in a pytorch model"""
@@ -963,7 +964,10 @@ class GPT2LMHeadModel(GPT2PreTrainedModel):
     def __init__(self, config):
         super().__init__(config)
         self.transformer = GPT2Model(config)
+        self.num_classes = config.vocab_size + 3
         self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
+        self.multi_label_head = nn.Linear(config.n_embd, self.num_classes, bias=False)
+
 
         # Model parallel
         self.model_parallel = False
@@ -971,6 +975,25 @@ class GPT2LMHeadModel(GPT2PreTrainedModel):
 
         # Initialize weights and apply final processing
         self.post_init()
+
+    def get_multi_label_loss(self, labels, multi_label_logits):
+        binary_tensor = torch.nn.functional.one_hot(torch.where(labels == IGNORE_INDEX, torch.tensor(0), labels),
+                                                    num_classes=self.num_classes)
+
+        # Flip the tensor along the second dimension
+        flipped = binary_tensor.flip(dims=[1])
+
+        # Compute the logical OR cumulative sum and flip back
+        result = flipped.cumsum(dim=1).flip(dims=[1])
+
+        # No need to convert back to binary as the result is already boolean
+        multi_label_labels = result.bool().float()
+        loss_fc = BCEWithLogitsLoss(reduction='none')
+        loss = loss_fc(multi_label_logits, multi_label_labels).mean(dim=-1)
+        ignore_loss = (labels != IGNORE_INDEX)
+        loss *= ignore_loss
+        return loss.sum() / ignore_loss.sum()
+        
 
     @add_start_docstrings(PARALLELIZE_DOCSTRING)
     def parallelize(self, device_map=None):
@@ -1100,6 +1123,7 @@ class GPT2LMHeadModel(GPT2PreTrainedModel):
             hidden_states = hidden_states.to(self.lm_head.weight.device)
 
         lm_logits = self.lm_head(hidden_states)
+        multi_label_logits = self.multi_label_head(hidden_states)
 
         loss = None
         if labels is not None:
@@ -1110,15 +1134,20 @@ class GPT2LMHeadModel(GPT2PreTrainedModel):
             mask = torch.roll(mask, shifts=1, dims=1)
             mask[:, 0] = 0
             mask_cumsum = mask.cumsum(dim=1)
-            labels[mask_cumsum == 0] = -100# Ignore label
+            labels[mask_cumsum == 0] = IGNORE_INDEX
+
 
 
             # Shift so that tokens < n predict n
+            shift_multi_label_logits = multi_label_logits[..., :-1, :].contiguous()
             shift_logits = lm_logits[..., :-1, :].contiguous()
             shift_labels = labels[..., 1:].contiguous()
+
+            multi_label_loss = self.get_multi_label_loss(shift_labels, shift_multi_label_logits)
             # Flatten the tokens
             loss_fct = CrossEntropyLoss()
             loss = loss_fct(shift_logits.view(-1, shift_logits.size(-1)), shift_labels.view(-1))
+            loss += multi_label_loss
 
         if not return_dict:
             output = (lm_logits,) + transformer_outputs[1:]
@@ -1131,6 +1160,7 @@ class GPT2LMHeadModel(GPT2PreTrainedModel):
             hidden_states=transformer_outputs.hidden_states,
             attentions=transformer_outputs.attentions,
             cross_attentions=transformer_outputs.cross_attentions,
+            multi_label_loss=multi_label_loss
         )
 
     @staticmethod
@@ -1166,6 +1196,7 @@ class GPT2DoubleHeadsModel(GPT2PreTrainedModel):
         config.num_labels = 1
         self.transformer = GPT2Model(config)
         self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
+        self.multi_label = nn.Linear(config.n_embd, config.vocab_size, bias=False)
         self.multiple_choice_head = SequenceSummary(config)
 
         # Model parallel

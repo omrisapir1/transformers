@@ -661,6 +661,7 @@ class CausalLMOutputWithCrossAttentions(ModelOutput):
     hidden_states: Optional[Tuple[torch.FloatTensor]] = None
     attentions: Optional[Tuple[torch.FloatTensor]] = None
     cross_attentions: Optional[Tuple[torch.FloatTensor]] = None
+    multi_label_loss: Optional[torch.FloatTensor] = None
 
 
 @dataclass

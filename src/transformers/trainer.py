@@ -3218,12 +3218,14 @@ class Trainer:
 
         # Initialize containers
         # losses/preds/labels on GPU/TPU (accumulated for eval_accumulation_steps)
+        multi_label_losses_host = None
         losses_host = None
         preds_host = None
         labels_host = None
         inputs_host = None
 
         # losses/preds/labels on CPU (final containers)
+        all_multi_label_losses = None
         all_losses = None
         all_preds = None
         all_labels = None
@@ -3244,7 +3246,7 @@ class Trainer:
             # Prediction step
             loss, logits, labels = self.prediction_step(model, inputs, prediction_loss_only, ignore_keys=ignore_keys)
             inputs_decode = self._prepare_input(inputs["input_ids"]) if args.include_inputs_for_metrics else None
-
+            loss, multi_label_loss = loss if isinstance(loss,tuple) and len(loss) == 2 else (loss, None)
             if is_torch_tpu_available():
                 xm.mark_step()
 
@@ -3252,6 +3254,9 @@ class Trainer:
             if loss is not None:
                 losses = self._nested_gather(loss.repeat(batch_size))
                 losses_host = losses if losses_host is None else torch.cat((losses_host, losses), dim=0)
+            if multi_label_loss is not None:
+                multi_label_losses = self._nested_gather(multi_label_loss.repeat(batch_size))
+                multi_label_losses_host = multi_label_losses if multi_label_losses_host is None else torch.cat((multi_label_losses_host, multi_label_losses), dim=0)
             if labels is not None:
                 labels = self._pad_across_processes(labels)
             if inputs_decode is not None:
@@ -3278,6 +3283,9 @@ class Trainer:
                 if losses_host is not None:
                     losses = nested_numpify(losses_host)
                     all_losses = losses if all_losses is None else np.concatenate((all_losses, losses), axis=0)
+                if multi_label_losses_host is not None:
+                    multi_label_losses = nested_numpify(multi_label_losses_host)
+                    all_multi_label_losses = multi_label_losses if all_multi_label_losses is None else np.concatenate((all_multi_label_losses, multi_label_losses), axis=0)
                 if preds_host is not None:
                     logits = nested_numpify(preds_host)
                     all_preds = logits if all_preds is None else nested_concat(all_preds, logits, padding_index=-100)
@@ -3305,6 +3313,11 @@ class Trainer:
         if losses_host is not None:
             losses = nested_numpify(losses_host)
             all_losses = losses if all_losses is None else np.concatenate((all_losses, losses), axis=0)
+        if multi_label_losses_host is not None:
+            multi_label_losses = nested_numpify(multi_label_losses_host)
+            all_multi_label_losses = multi_label_losses if all_multi_label_losses is None else np.concatenate(
+                (all_multi_label_losses, multi_label_losses), axis=0)
+
         if preds_host is not None:
             logits = nested_numpify(preds_host)
             all_preds = logits if all_preds is None else nested_concat(all_preds, logits, padding_index=-100)
@@ -3336,6 +3349,8 @@ class Trainer:
         # samplers has been rounded to a multiple of batch_size, so we truncate.
         if all_losses is not None:
             all_losses = all_losses[:num_samples]
+        if all_multi_label_losses is not None:
+            all_multi_label_losses = all_multi_label_losses[:num_samples]
         if all_preds is not None:
             all_preds = nested_truncate(all_preds, num_samples)
         if all_labels is not None:
@@ -3359,6 +3374,8 @@ class Trainer:
 
         if all_losses is not None:
             metrics[f"{metric_key_prefix}_loss"] = all_losses.mean().item()
+        if all_multi_label_losses is not None:
+            metrics[f"{metric_key_prefix}_multi_label_loss"] = all_multi_label_losses.mean().item()
         if hasattr(self, "jit_compilation_time"):
             metrics[f"{metric_key_prefix}_jit_compilation_time"] = self.jit_compilation_time
 
@@ -3520,7 +3537,7 @@ class Trainer:
                         self._past = outputs[self.args.past_index - 1]
 
         if prediction_loss_only:
-            return (loss, None, None)
+            return ((loss, outputs.multi_label_loss), None, None)
 
         logits = nested_detach(logits)
         if len(logits) == 1:
