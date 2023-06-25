@@ -989,7 +989,7 @@ class GPT2LMHeadModel(GPT2PreTrainedModel):
         # No need to convert back to binary as the result is already boolean
         multi_label_labels = result.bool().float()
         loss_fc = BCEWithLogitsLoss(reduction='none')
-        loss = loss_fc(multi_label_logits, multi_label_labels).sum(dim=-1)
+        loss = loss_fc(multi_label_logits, multi_label_labels).sum(dim=-1) / 50
         ignore_loss = (labels != IGNORE_INDEX)
         loss *= ignore_loss
         return loss.sum() / ignore_loss.sum()
