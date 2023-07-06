@@ -181,6 +181,45 @@ class GPT2Attention(nn.Module):
         self.num_heads = self.num_heads - len(heads)
         self.pruned_heads = self.pruned_heads.union(heads)
 
+
+    def _attn_multi_label(self, query, key, value, attention_mask=None, head_mask=None, causal_mask=None):
+        attn_weights = torch.matmul(query, key.transpose(-1, -2))
+
+        if self.scale_attn_weights:
+            attn_weights = attn_weights / torch.full(
+                [], value.size(-1) ** 0.5, dtype=attn_weights.dtype, device=attn_weights.device
+            )
+
+        if self.scale_attn_by_inverse_layer_idx:
+            attn_weights = attn_weights / float(self.layer_idx + 1)
+
+        if not self.is_cross_attention:
+            # Replace the standard causal mask with your custom one
+            # Make sure causal_mask is passed as an argument when calling this method
+            mask_value = torch.finfo(attn_weights.dtype).min
+            mask_value = torch.full([], mask_value, dtype=attn_weights.dtype).to(attn_weights.device)
+
+            causal_mask = causal_mask.unsqueeze(1)  # Add an extra dimension for the attention heads
+            causal_mask = causal_mask.expand(-1, attn_weights.shape[1], -1, -1)  # Replicate the mask across all attention heads
+
+            attn_weights = torch.where(causal_mask, attn_weights.to(attn_weights.dtype), mask_value)
+
+        if attention_mask is not None:
+            # Apply the attention mask
+            attn_weights = attn_weights + attention_mask
+
+        attn_weights = nn.functional.softmax(attn_weights, dim=-1)
+
+        attn_weights = attn_weights.type(value.dtype)
+        attn_weights = self.attn_dropout(attn_weights)
+
+        if head_mask is not None:
+            attn_weights = attn_weights * head_mask
+
+        attn_output = torch.matmul(attn_weights, value)
+
+        return attn_output, attn_weights
+
     def _attn(self, query, key, value, attention_mask=None, head_mask=None):
         attn_weights = torch.matmul(query, key.transpose(-1, -2))
 
@@ -299,6 +338,8 @@ class GPT2Attention(nn.Module):
         encoder_attention_mask: Optional[torch.FloatTensor] = None,
         use_cache: Optional[bool] = False,
         output_attentions: Optional[bool] = False,
+        is_multi_label: Optional[bool] = False,
+        casual_mask: Optional[torch.FloatTensor] = None,
     ) -> Tuple[Union[torch.Tensor, Tuple[torch.Tensor]], ...]:
         if encoder_hidden_states is not None:
             if not hasattr(self, "q_attn"):
@@ -329,6 +370,8 @@ class GPT2Attention(nn.Module):
 
         if self.reorder_and_upcast_attn:
             attn_output, attn_weights = self._upcast_and_reordered_attn(query, key, value, attention_mask, head_mask)
+        elif is_multi_label:
+            attn_output, attn_weights = self._attn_multi_label(query, key, value, attention_mask, head_mask, causal_mask=casual_mask)
         else:
             attn_output, attn_weights = self._attn(query, key, value, attention_mask, head_mask)
 
@@ -386,6 +429,8 @@ class GPT2Block(nn.Module):
         encoder_attention_mask: Optional[torch.FloatTensor] = None,
         use_cache: Optional[bool] = False,
         output_attentions: Optional[bool] = False,
+        is_multi_label: Optional[bool] = False,
+        casual_mask: Optional[torch.FloatTensor] = None,
     ) -> Union[Tuple[torch.Tensor], Optional[Tuple[torch.Tensor, Tuple[torch.FloatTensor, ...]]]]:
         residual = hidden_states
         hidden_states = self.ln_1(hidden_states)
@@ -396,6 +441,8 @@ class GPT2Block(nn.Module):
             head_mask=head_mask,
             use_cache=use_cache,
             output_attentions=output_attentions,
+            is_multi_label=is_multi_label,
+            casual_mask=casual_mask
         )
         attn_output = attn_outputs[0]  # output_attn: a, present, (attentions)
         outputs = attn_outputs[1:]
@@ -770,6 +817,8 @@ class GPT2Model(GPT2PreTrainedModel):
         output_attentions: Optional[bool] = None,
         output_hidden_states: Optional[bool] = None,
         return_dict: Optional[bool] = None,
+        is_multi_label: Optional[bool] = False,
+        casual_mask: Optional[torch.FloatTensor] = None,
     ) -> Union[Tuple, BaseModelOutputWithPastAndCrossAttentions]:
         output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
         output_hidden_states = (
@@ -845,8 +894,12 @@ class GPT2Model(GPT2PreTrainedModel):
 
         if inputs_embeds is None:
             inputs_embeds = self.wte(input_ids)
-        position_embeds = self.wpe(position_ids)
-        hidden_states = inputs_embeds + position_embeds
+        if is_multi_label:
+            hidden_states = inputs_embeds
+        else:
+            position_embeds = self.wpe(position_ids)
+            hidden_states = inputs_embeds + position_embeds
+
 
         if token_type_ids is not None:
             token_type_embeds = self.wte(token_type_ids)
@@ -910,6 +963,8 @@ class GPT2Model(GPT2PreTrainedModel):
                     encoder_attention_mask=encoder_attention_mask,
                     use_cache=use_cache,
                     output_attentions=output_attentions,
+                    is_multi_label=is_multi_label,
+                    casual_mask=casual_mask
                 )
 
             hidden_states = outputs[0]
@@ -950,6 +1005,26 @@ class GPT2Model(GPT2PreTrainedModel):
         )
 
 
+class CrossAttention(nn.Module):
+    def __init__(self, embed_dim, num_heads):
+        super(CrossAttention, self).__init__()
+        self.multihead_attn = nn.MultiheadAttention(embed_dim, num_heads)
+
+    def forward(self, query, key, value, attn_mask=None):
+        # query => hidden_states from GPT-2
+        # key, value => multi_label_hidden_states
+        # Transpose for the multihead attention layer (batch_first=False by default)
+        query = query.transpose(0, 1)
+        key = key.transpose(0, 1)
+        value = value.transpose(0, 1)
+
+        attn_output, _ = self.multihead_attn(query, key, value, attn_mask=attn_mask)
+        # Transpose back to (batch_size, seq_len, embed_dim)
+        attn_output = attn_output.transpose(0, 1)
+
+        return attn_output
+
+
 @add_start_docstrings(
     """
     The GPT2 Model transformer with a language modeling head on top (linear layer with weights tied to the input
@@ -965,8 +1040,10 @@ class GPT2LMHeadModel(GPT2PreTrainedModel):
         super().__init__(config)
         self.transformer = GPT2Model(config)
         self.num_classes = config.vocab_size + 3
-        self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
+        self.lm_head = nn.Linear(config.n_embd * 2, config.vocab_size, bias=False)
+        self.lm_multi_label_head = nn.Linear(config.n_embd * 2, self.num_classes, bias=False)
         self.multi_label_head = nn.Linear(config.n_embd, self.num_classes, bias=False)
+        self.cross_attention = CrossAttention(config.n_embd,config.n_head)
 
 
         # Model parallel
@@ -989,11 +1066,39 @@ class GPT2LMHeadModel(GPT2PreTrainedModel):
         # No need to convert back to binary as the result is already boolean
         multi_label_labels = result.bool().float()
         loss_fc = BCEWithLogitsLoss(reduction='none')
+        multi_label_labels[:,:,0] = torch.tensor(0).to(labels.device)
         loss = loss_fc(multi_label_logits, multi_label_labels).sum(dim=-1) / 50
         ignore_loss = (labels != IGNORE_INDEX)
         loss *= ignore_loss
-        return loss.sum() / ignore_loss.sum()
-        
+        return loss.sum() /ignore_loss.sum()
+
+    def get_multi_label_pred(self, multi_label_preds, threshold=0.999):
+        threshold = 0.9999999701
+        multi_label_binary_preds = multi_label_preds > threshold
+        MAX_SEQ_LENGTH = multi_label_binary_preds.shape[1]
+        batch_size = multi_label_binary_preds.shape[0]
+
+        all_multi_label_prediction = torch.full((batch_size, MAX_SEQ_LENGTH), self.config.pad_token_id)
+        casual_mask = torch.zeros((batch_size, MAX_SEQ_LENGTH, MAX_SEQ_LENGTH), dtype=torch.bool)
+
+        for i in range(batch_size):
+            # Extract the unique predicted tokens for each sequence in the batch
+            unique_tokens_per_sequence = torch.unique(multi_label_binary_preds[i].nonzero(as_tuple=True)[1])
+
+            # Take only the first MAX_SEQ_LENGTH unique tokens
+            unique_tokens_per_sequence = unique_tokens_per_sequence[:MAX_SEQ_LENGTH]
+            num_tokens = len(unique_tokens_per_sequence)
+
+            all_multi_label_prediction[i, :num_tokens] = unique_tokens_per_sequence
+            mapping_tensor = torch.full((multi_label_preds.shape[2],), -1)
+            mapping_tensor[unique_tokens_per_sequence] = torch.arange(unique_tokens_per_sequence.shape[0])
+
+            # Replaced the loop with this line
+            casual_mask[i, :, :num_tokens] = multi_label_binary_preds[i, :, unique_tokens_per_sequence]
+
+        attention_mask = all_multi_label_prediction != self.config.pad_token_id
+        return self.transformer(all_multi_label_prediction, attention_mask=attention_mask, is_multi_label=True, casual_mask=casual_mask, return_dict=True)
+
 
     @add_start_docstrings(PARALLELIZE_DOCSTRING)
     def parallelize(self, device_map=None):
@@ -1122,13 +1227,15 @@ class GPT2LMHeadModel(GPT2PreTrainedModel):
             torch.cuda.set_device(self.transformer.first_device)
             hidden_states = hidden_states.to(self.lm_head.weight.device)
 
-        lm_logits = self.lm_head(hidden_states)
-        multi_label_logits = self.multi_label_head(hidden_states)
+        # lm_logits = self.lm_head(hidden_states)
+        # multi_label_preds = torch.sigmoid(self.multi_label_head(hidden_states))
 
         loss = None
         if labels is not None:
+
+            multi_label_logits = self.multi_label_head(hidden_states)
             # move labels to correct device to enable model parallelism
-            labels = labels.to(lm_logits.device)
+            labels = labels.to(hidden_states.device)
 
             mask = labels == self.config.sep_token_id
             mask = torch.roll(mask, shifts=1, dims=1)
@@ -1140,10 +1247,16 @@ class GPT2LMHeadModel(GPT2PreTrainedModel):
 
             # Shift so that tokens < n predict n
             shift_multi_label_logits = multi_label_logits[..., :-1, :].contiguous()
-            shift_logits = lm_logits[..., :-1, :].contiguous()
+
             shift_labels = labels[..., 1:].contiguous()
 
             multi_label_loss = self.get_multi_label_loss(shift_labels, shift_multi_label_logits)
+            multi_label_hidden_states = self.get_multi_label_pred(torch.sigmoid(shift_multi_label_logits))[0]
+            cross_attention_hidden_states = self.cross_attention(hidden_states, multi_label_hidden_states, multi_label_hidden_states)
+            cat_hidden_states= torch.cat([cross_attention_hidden_states, hidden_states], dim=2)
+            lm_logits = self.lm_multi_label_head(cat_hidden_states)
+            shift_logits = lm_logits[..., :-1, :].contiguous()
+
             # Flatten the tokens
             loss_fct = CrossEntropyLoss()
             loss = loss_fct(shift_logits.view(-1, shift_logits.size(-1)), shift_labels.view(-1))
