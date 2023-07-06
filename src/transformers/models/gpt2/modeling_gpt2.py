@@ -1072,8 +1072,7 @@ class GPT2LMHeadModel(GPT2PreTrainedModel):
         loss *= ignore_loss
         return loss.sum() /ignore_loss.sum()
 
-    def get_multi_label_pred(self, multi_label_preds, threshold=0.999):
-        threshold = 0.9999999701
+    def get_multi_label_pred(self, multi_label_preds, threshold=0.5):
         multi_label_binary_preds = multi_label_preds > threshold
         MAX_SEQ_LENGTH = multi_label_binary_preds.shape[1]
         batch_size = multi_label_binary_preds.shape[0]
@@ -1097,7 +1096,7 @@ class GPT2LMHeadModel(GPT2PreTrainedModel):
             casual_mask[i, :, :num_tokens] = multi_label_binary_preds[i, :, unique_tokens_per_sequence]
 
         attention_mask = all_multi_label_prediction != self.config.pad_token_id
-        return self.transformer(all_multi_label_prediction.to(self.transformer.first_device), attention_mask=attention_mask.to(self.transformer.first_device), is_multi_label=True, casual_mask=casual_mask.to(self.transformer.first_device), return_dict=True)
+        return self.transformer(all_multi_label_prediction.to(multi_label_preds.device), attention_mask=attention_mask.to(multi_label_preds.device), is_multi_label=True, casual_mask=casual_mask.to(multi_label_preds.device), return_dict=True)
 
 
     @add_start_docstrings(PARALLELIZE_DOCSTRING)
