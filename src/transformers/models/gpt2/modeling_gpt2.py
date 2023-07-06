@@ -1097,7 +1097,7 @@ class GPT2LMHeadModel(GPT2PreTrainedModel):
             casual_mask[i, :, :num_tokens] = multi_label_binary_preds[i, :, unique_tokens_per_sequence]
 
         attention_mask = all_multi_label_prediction != self.config.pad_token_id
-        return self.transformer(all_multi_label_prediction, attention_mask=attention_mask, is_multi_label=True, casual_mask=casual_mask, return_dict=True)
+        return self.transformer(all_multi_label_prediction.to(self.transformer.first_device), attention_mask=attention_mask.to(self.transformer.first_device), is_multi_label=True, casual_mask=casual_mask.to(self.transformer.first_device), return_dict=True)
 
 
     @add_start_docstrings(PARALLELIZE_DOCSTRING)
