@@ -1067,7 +1067,7 @@ class GPT2LMHeadModel(GPT2PreTrainedModel):
         multi_label_labels = result.bool().float()
         loss_fc = BCEWithLogitsLoss(reduction='none')
         multi_label_labels[:,:,0] = torch.tensor(0).to(labels.device)
-        loss = loss_fc(multi_label_logits, multi_label_labels).sum(dim=-1) / 50
+        loss = loss_fc(multi_label_logits, multi_label_labels).sum(dim=-1)
         ignore_loss = (labels != IGNORE_INDEX)
         loss *= ignore_loss
         return loss.sum() /ignore_loss.sum()
