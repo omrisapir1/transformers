@@ -1041,6 +1041,7 @@ class GPT2LMHeadModel(GPT2PreTrainedModel):
         self.transformer = GPT2Model(config)
         self.num_classes = config.vocab_size + 3
         self.lm_head = nn.Linear(config.n_embd * 2, config.vocab_size, bias=False)
+        self.fake_lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
         self.lm_multi_label_head = nn.Linear(config.n_embd * 2, self.num_classes, bias=False)
         self.multi_label_head = nn.Linear(config.n_embd, self.num_classes, bias=False)
         self.cross_attention = CrossAttention(config.n_embd,config.n_head)
@@ -1254,7 +1255,7 @@ class GPT2LMHeadModel(GPT2PreTrainedModel):
             # cross_attention_hidden_states = self.cross_attention(hidden_states, multi_label_hidden_states, multi_label_hidden_states)
             # cat_hidden_states= torch.cat([cross_attention_hidden_states, hidden_states], dim=2)
             # lm_logits = self.lm_multi_label_head(cat_hidden_states)
-            lm_logits = self.lm_head(hidden_states)
+            lm_logits = self.fake_lm_head(hidden_states)
             shift_logits = lm_logits[..., :-1, :].contiguous()
 
             # Flatten the tokens
