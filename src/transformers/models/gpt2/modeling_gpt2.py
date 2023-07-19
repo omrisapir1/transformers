@@ -1073,6 +1073,11 @@ class GPT2LMHeadModel(GPT2PreTrainedModel):
         loss *= ignore_loss
         return loss.sum() /ignore_loss.sum()
 
+    def get_multi_label_max_pred(self, multi_label_preds):
+        max_token_id = multi_label_preds.argmax(dim=2)
+        return self.transformer.wte(max_token_id)
+
+
     def get_multi_label_pred(self, multi_label_preds, threshold=0.5):
         multi_label_binary_preds = multi_label_preds > threshold
         MAX_SEQ_LENGTH = multi_label_binary_preds.shape[1]
@@ -1133,7 +1138,7 @@ class GPT2LMHeadModel(GPT2PreTrainedModel):
         torch.cuda.empty_cache()
 
     def get_output_embeddings(self):
-        return self.lm_multi_label_head
+        # return self.lm_multi_label_head
         return self.lm_head
 
     def set_output_embeddings(self, new_embeddings):
@@ -1252,10 +1257,13 @@ class GPT2LMHeadModel(GPT2PreTrainedModel):
 
             shift_labels = labels[..., 1:].contiguous()
 
-            multi_label_loss = self.get_multi_label_loss(shift_labels, shift_multi_label_logits)
-            multi_label_hidden_states = self.get_multi_label_pred(torch.sigmoid(shift_multi_label_logits))[0]
+            multi_label_loss = self.get_multi_label_loss(labels, multi_label_logits)
+            multi_label_hidden_states = self.get_multi_label_pred(torch.sigmoid(multi_label_logits))[0]
             cross_attention_hidden_states = self.cross_attention(hidden_states, multi_label_hidden_states, multi_label_hidden_states)
             cat_hidden_states= torch.cat([cross_attention_hidden_states, hidden_states], dim=2)
+            # multi_label_max_pred = self.get_multi_label_max_pred(torch.sigmoid(shift_multi_label_logits))
+            # cat_hidden_states= torch.cat([multi_label_max_pred, hidden_states], dim=2)
+
             lm_logits = self.lm_multi_label_head(cat_hidden_states)
             # lm_logits = self.lm_head(hidden_states)
             # lm_logits = self.fake_lm_head(hidden_states)
