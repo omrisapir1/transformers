@@ -1044,6 +1044,7 @@ class GPT2LMHeadModel(GPT2PreTrainedModel):
         self.fake_lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
         self.lm_multi_label_head = nn.Linear(config.n_embd * 2, self.num_classes, bias=False)
         self.multi_label_head = nn.Linear(config.n_embd, self.num_classes, bias=False)
+        self.layer_norm = torch.nn.LayerNorm(config.n_embd * 2)
         self.cross_attention = CrossAttention(config.n_embd,config.n_head)
 
 
@@ -1263,7 +1264,7 @@ class GPT2LMHeadModel(GPT2PreTrainedModel):
             # cat_hidden_states= torch.cat([cross_attention_hidden_states, hidden_states], dim=2)
             multi_label_max_pred = self.get_multi_label_max_pred(torch.sigmoid(multi_label_logits))
             cat_hidden_states= torch.cat([multi_label_max_pred, hidden_states], dim=2)
-
+            cat_hidden_states = self.layer_norm(cat_hidden_states)
             lm_logits = self.lm_multi_label_head(cat_hidden_states)
             # lm_logits = self.lm_head(hidden_states)
             # lm_logits = self.fake_lm_head(hidden_states)
