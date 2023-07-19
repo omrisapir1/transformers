@@ -1133,7 +1133,7 @@ class GPT2LMHeadModel(GPT2PreTrainedModel):
         torch.cuda.empty_cache()
 
     def get_output_embeddings(self):
-        return self.fake_lm_head
+        # return self.fake_lm_head
         return self.lm_head
 
     def set_output_embeddings(self, new_embeddings):
