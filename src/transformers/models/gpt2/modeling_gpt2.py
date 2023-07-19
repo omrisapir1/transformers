@@ -1253,16 +1253,16 @@ class GPT2LMHeadModel(GPT2PreTrainedModel):
 
 
             # Shift so that tokens < n predict n
-            shift_multi_label_logits = multi_label_logits[..., :-1, :].contiguous()
+            # shift_multi_label_logits = multi_label_logits[..., :-1, :].contiguous()
 
             shift_labels = labels[..., 1:].contiguous()
 
             multi_label_loss = self.get_multi_label_loss(labels, multi_label_logits)
-            multi_label_hidden_states = self.get_multi_label_pred(torch.sigmoid(multi_label_logits))[0]
-            cross_attention_hidden_states = self.cross_attention(hidden_states, multi_label_hidden_states, multi_label_hidden_states)
-            cat_hidden_states= torch.cat([cross_attention_hidden_states, hidden_states], dim=2)
-            # multi_label_max_pred = self.get_multi_label_max_pred(torch.sigmoid(shift_multi_label_logits))
-            # cat_hidden_states= torch.cat([multi_label_max_pred, hidden_states], dim=2)
+            # multi_label_hidden_states = self.get_multi_label_pred(torch.sigmoid(multi_label_logits))[0]
+            # cross_attention_hidden_states = self.cross_attention(hidden_states, multi_label_hidden_states, multi_label_hidden_states)
+            # cat_hidden_states= torch.cat([cross_attention_hidden_states, hidden_states], dim=2)
+            multi_label_max_pred = self.get_multi_label_max_pred(torch.sigmoid(multi_label_logits))
+            cat_hidden_states= torch.cat([multi_label_max_pred, hidden_states], dim=2)
 
             lm_logits = self.lm_multi_label_head(cat_hidden_states)
             # lm_logits = self.lm_head(hidden_states)
