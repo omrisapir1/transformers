@@ -1266,7 +1266,7 @@ class GPT2LMHeadModel(GPT2PreTrainedModel):
             # cat_hidden_states= torch.cat([hidden_states, hidden_states], dim=2)
             # cat_hidden_states = self.layer_norm(cat_hidden_states)
             # lm_logits = self.lm_multi_label_head(cat_hidden_states)
-            lm_logits = self.lm_head(cross_attention_hidden_states)
+            lm_logits = self.lm_head(hidden_states + cross_attention_hidden_states)
             # lm_logits = self.fake_lm_head(hidden_states)
             shift_logits = lm_logits[..., :-1, :].contiguous()
 
