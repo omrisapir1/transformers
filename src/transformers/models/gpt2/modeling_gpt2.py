@@ -1258,7 +1258,7 @@ class GPT2LMHeadModel(GPT2PreTrainedModel):
 
             shift_labels = labels[..., 1:].contiguous()
 
-            # multi_label_loss = self.get_multi_label_loss(labels, multi_label_logits)
+            multi_label_loss = self.get_multi_label_loss(labels, multi_label_logits)
             # multi_label_hidden_states = self.get_multi_label_pred(torch.sigmoid(multi_label_logits))[0]
             # cross_attention_hidden_states = self.cross_attention(hidden_states, multi_label_hidden_states, multi_label_hidden_states)
             # cat_hidden_states= torch.cat([cross_attention_hidden_states, hidden_states], dim=2)
